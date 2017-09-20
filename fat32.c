@@ -11,16 +11,23 @@
 void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
 {
   printf("[INIT]\n");
+  bpb = (struct bios_param_block*)malloc(sizeof(struct bios_param_block));
+  dir_entry = (struct directory_entry*)malloc(sizeof(struct directory_entry));
 
-  //Start with a default, arbitrary size. Will be deleted soon.
-  buffer = (unsigned char*)malloc(512);
-  device_read_sector(buffer, 512, 1, 0);
-  memcpy(&bpb, buffer+BPB_OFFSET, sizeof(struct bios_param_block));
+  device_read_sector((char*)bpb, sizeof(struct bios_param_block), 1, BPB_OFFSET);
+  print_bpb();
 
   free(buffer);
-  buffer = (unsigned char*)malloc(bpb.bytes_per_sector);
+  buffer = (char*)malloc(bpb->bytes_sector);
+  cluster_buffer = (char*)malloc(bpb->bytes_sector * bpb->sectors_cluster);
 
-  print_bpb();
+  fat_offset = bpb->reserved_sectors * bpb->bytes_sector;
+  clusters_offset = fat_offset + (bpb->fat_amount * bpb->sectors_per_fat * bpb->bytes_sector);
+  printf("%d\n", clusters_offset);
+
+  //Printing info of third(second?) file. Change multiplier to print another one.
+  device_read_sector((char*)dir_entry, sizeof(struct directory_entry), 1, clusters_offset+(32*2));
+  print_dir_entry();
 
   return NULL;
 }
@@ -68,25 +75,25 @@ int fat32_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t off
   return 0;
 }
 
+//Printing only the relevant data
 void print_bpb()
 {
-  printf("Bytes per Sector: %" PRId16 "\n",         bpb.bytes_per_sector);
-  printf("Sectors per Cluster: %" PRId8 "\n",       bpb.sectors_per_cluster);
-  printf("Reserved Logical Sectors: %" PRId16 "\n", bpb.reserved_logical_sectors);
-  printf("File Allocation Tables #: %" PRId8 "\n",  bpb.file_allocation_tables);
-  printf("Max Root Dir Entries: %" PRId16 "\n",     bpb.max_root_directory_entries);
-  printf("Total Logical Sectors: %" PRId16 "\n",    bpb.total_logical_sectors);
-  printf("Media Descriptor: %u\n",                  bpb.media_descriptor);
-  printf("Logical Sectors per FAT: %" PRId16 "\n",  bpb.logical_sectors_per_fat);
-  printf("Sectors per Track: %" PRId16 "\n",        bpb.sectors_per_track);
-  printf("Number of Heads: %" PRId16 "\n",          bpb.number_of_heads);
-  printf("Hidden Sectors: %" PRId64 "\n",           bpb.hidden_sectors);
-  printf("Large Sectors: %" PRId64 "\n",            bpb.large_sectors);
-  printf("Sectors per FAT: %" PRId64 "\n",          bpb.sectors_per_fat);
-  printf("File System Version: %" PRId16 "\n",      bpb.file_system_version);
-  printf("Root Cluser Number: %" PRId64 "\n",       bpb.root_cluster_number);
-  printf("FS Info Sector Number: %" PRId16 "\n",    bpb.file_system_information_sector_number);
-  printf("Backup Boot Sector: %" PRId16 "\n",       bpb.backup_boot_sector);
+  printf("\n-- BIOS Parameter Block -- \n");
+  printf("Bytes per Sector: %" PRId16 "\n",         bpb->bytes_sector);
+  printf("Sectors per Cluster: %" PRId8 "\n",       bpb->sectors_cluster);
+  printf("Reserved Logical Sectors: %" PRId16 "\n", bpb->reserved_sectors);
+  printf("File Allocation Tables #: %" PRId8 "\n",  bpb->fat_amount);
+  printf("Logical Sectors per FAT: %" PRId64 "\n",  bpb->sectors_per_fat);
+}
+
+void print_dir_entry()
+{
+  int32_t first_cluster = (dir_entry->First_Cluster_High << 16) | dir_entry->First_Cluster_Low;
+  printf("\n-- Directory Entry -- \n");
+  printf("Filename: %s\n",                    dir_entry->Short_Filename);
+  printf("Attributes: %X\n",                  dir_entry->Attributes);
+  printf("First Cluster: %" PRId16 "\n",      first_cluster);
+  printf("File Size: %" PRId32 "\n",          dir_entry->Filesize);
 }
 
 int main(int argc, char *argv[])

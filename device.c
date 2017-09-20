@@ -28,14 +28,14 @@ void device_close()
     fclose(f);
 }
 
-int device_read_sector(unsigned char buffer[], int size, int count, int offset)
+int device_read_sector(char buffer[], int size, int count, int offset)
 {
     fseek(f, offset, SEEK_SET);
 
     return ( fread(buffer, count, size, f) == (size*count) );
 }
 
-int device_write_sector(unsigned char buffer[], int size, int count, int offset)
+int device_write_sector(char buffer[], int size, int count, int offset)
 {
     fseek(f, offset, SEEK_SET);
 
