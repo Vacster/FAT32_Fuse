@@ -23,7 +23,6 @@ void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
 
   fat_offset = bpb->reserved_sectors * bpb->bytes_sector;
   clusters_offset = fat_offset + (bpb->fat_amount * bpb->sectors_per_fat * bpb->bytes_sector);
-  printf("%d\n", clusters_offset);
 
   //Printing info of third(second?) file. Change multiplier to print another one.
   device_read_sector((char*)dir_entry, sizeof(struct directory_entry), 1, clusters_offset+(32*2));
