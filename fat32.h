@@ -65,11 +65,13 @@ struct directory_entry {
   int16_t Last_Modified_Date; //Doubtful
   int16_t First_Cluster_Low;
   int32_t Filesize;
-} *dir_entry;
+};
 #pragma pack(pop)
 
 void print_bpb();
 void print_dir_entry();
+struct directory_entry* resolve(char *path);
+int is_dir_entry_empty(struct directory_entry *dir_entry);
 void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg);
 int fat32_getattr (const char *path, struct stat *stbuf, struct fuse_file_info *fi);
 int fat32_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi, enum fuse_readdir_flags flags);
