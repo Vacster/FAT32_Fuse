@@ -17,9 +17,8 @@ void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
   device_read_sector((char*)bpb, sizeof(struct bios_param_block), 1, BPB_OFFSET);
   print_bpb();
 
-  free(buffer);
-  buffer = (char*)malloc(bpb->bytes_sector);
-  cluster_buffer = (char*)malloc(bpb->bytes_sector * bpb->sectors_cluster);
+  buffer =          (char*)malloc(bpb->bytes_sector);
+  cluster_buffer =  (char*)malloc(bpb->bytes_sector * bpb->sectors_cluster);
 
   fat_offset = bpb->reserved_sectors * bpb->bytes_sector;
   clusters_offset = fat_offset + (bpb->fat_amount * bpb->sectors_per_fat * bpb->bytes_sector);
@@ -27,6 +26,10 @@ void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
   //Printing info of third(second?) file. Change multiplier to print another one.
   device_read_sector((char*)dir_entry, sizeof(struct directory_entry), 1, clusters_offset+(32*2));
   print_dir_entry();
+
+  unsigned int next;
+  device_read_sector((char*)&next, sizeof(int), 1, fat_offset+(((dir_entry->First_Cluster_High<<16)|dir_entry->First_Cluster_Low) * 4));
+  printf("%d\n", next);
 
   return NULL;
 }
@@ -66,12 +69,18 @@ int fat32_getattr (const char *path, struct stat *stbuf, struct fuse_file_info *
   return 0;
 }
 
-int fat32_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi, enum fuse_readdir_flags flags)
+int fat32_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi, enum fuse_readdir_flags flags)
 {
   printf("[READDIR]\n");
 
   filler(buf, "..", NULL, 0, FUSE_FILL_DIR_PLUS);
   return 0;
+}
+
+void resolve(const char *path, struct directory_entry *dir_entry)
+{
+  // /new.png
+
 }
 
 //Printing only the relevant data
@@ -82,7 +91,8 @@ void print_bpb()
   printf("Sectors per Cluster: %" PRId8 "\n",       bpb->sectors_cluster);
   printf("Reserved Logical Sectors: %" PRId16 "\n", bpb->reserved_sectors);
   printf("File Allocation Tables #: %" PRId8 "\n",  bpb->fat_amount);
-  printf("Logical Sectors per FAT: %" PRId64 "\n",  bpb->sectors_per_fat);
+  printf("Logical Sectors per FAT: %" PRId32 "\n",  bpb->sectors_per_fat);
+  printf("Root Cluster Number: %" PRId32 "\n",      bpb->root_cluster_number);
 }
 
 void print_dir_entry()
@@ -97,7 +107,7 @@ void print_dir_entry()
 
 int main(int argc, char *argv[])
 {
-  if(!device_open(realpath("/dev/sdb1", NULL)))
+  if(!device_open(realpath("/dev/sdc1", NULL)))
   {
     printf("Cannot open device file %s\n", argv[1]);
     return -1;

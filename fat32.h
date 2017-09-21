@@ -20,8 +20,12 @@ struct bios_param_block {
   int16_t   logical_sectors_per_fat;    //Should be 0
   int16_t   sectors_per_track;
   int16_t   number_of_heads;
-  int64_t   hidden_sectors;
-  int64_t   sectors_per_fat;
+  int32_t   hidden_sectors;
+  int32_t   total_logical_sectors_2;
+  int32_t   sectors_per_fat;
+  int16_t   drive_description;
+  int16_t   file_system_version;
+  int32_t   root_cluster_number;
 } *bpb;
 
 struct directory_entry {
