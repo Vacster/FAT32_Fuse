@@ -22,18 +22,18 @@ void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
   fat_offset = bpb->reserved_sectors * bpb->bytes_sector;
   clusters_offset = fat_offset + (bpb->fat_amount * bpb->sectors_per_fat * bpb->bytes_sector);
   device_read_sector((char*)&end_of_chain, 4, 1, fat_offset + 4);
-
+  // printf("%d\n",clusters_offset);
   //Printing info of third(second?) file. Change multiplier to print another one.
   // device_read_sector((char*)dir_entry, sizeof(struct directory_entry), 1, clusters_offset+(32*2));
   // print_dir_entry();
   //
   // unsigned int next;
   // device_read_sector((char*)&next, sizeof(int), 1, fat_offset+(((dir_entry->First_Cluster_High<<16)|dir_entry->First_Cluster_Low) * 4));
-  // struct directory_entry *dir_entry = resolve("/FOLDER/NEW_IMG");
+  // struct directory_entry *dir_entry = resolve("/FOLDER");
   // if(dir_entry != NULL)
   //   print_dir_entry(dir_entry);
 
-  printf("remaining_clusters: %u\n", remaining_clusters(3));
+  // printf("remaining_clusters: %u\n", remaining_clusters(3));
   return NULL;
 }
 
@@ -64,11 +64,12 @@ int fat32_getattr (const char *path, struct stat *stbuf, struct fuse_file_info *
   else
   {
     struct directory_entry *dir_entry = resolve(path);
-      printf("Here\n");
     if(dir_entry != NULL){
-      printf("Here\n");
-      //TODO: Complex math for access dates and times
-      stbuf->st_mode = S_IFREG | 0644;
+      if(dir_entry->Attributes & (1<<4))
+        stbuf->st_mode = S_IFDIR;
+      else
+        stbuf->st_mode = S_IFREG | 0644;
+
       stbuf->st_nlink = 1;  //TODO: ?
       stbuf->st_size = dir_entry->Filesize;
     }
@@ -81,7 +82,27 @@ int fat32_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t off
 {
   printf("[READDIR]\n");
 
-  filler(buf, "..", NULL, 0, FUSE_FILL_DIR_PLUS);
+  struct directory_entry *dir_entry = resolve(path);
+  int cluster = ((dir_entry->First_Cluster_High<<16)|dir_entry->First_Cluster_Low);
+  int dir_entries_per_cluster = (bpb->sectors_cluster*bpb->bytes_sector) / sizeof(struct directory_entry);
+  device_read_sector(cluster_buffer, bpb->bytes_sector, bpb->sectors_cluster, clusters_offset + ((bpb->sectors_cluster*bpb->bytes_sector)*(cluster - 2)));
+  for(int x = 0; x < dir_entries_per_cluster; x ++)
+  {
+    memcpy(dir_entry, cluster_buffer + (sizeof(struct directory_entry) * x), sizeof(struct directory_entry));
+
+    if(is_dir_entry_empty(dir_entry))
+      break;
+
+    if(*((uint8_t*)dir_entry) != 0x41 && *((uint8_t*)dir_entry) != 0xE5 && !(dir_entry->Attributes & (1<<3)))
+    {
+      //Hack
+      char name[9];
+      name[8] = '\0';
+      strncpy(name, dir_entry->Short_Filename, 8);
+      filler(buf, name, NULL, 0, FUSE_FILL_DIR_PLUS);
+    }
+  }
+
   return 0;
 }
 
@@ -95,6 +116,13 @@ struct directory_entry* resolve(const char *path)
   struct directory_entry *dir_entry = (struct directory_entry*) malloc(sizeof(struct directory_entry));
 
   device_read_sector(cluster_buffer, bpb->bytes_sector, bpb->sectors_cluster, clusters_offset + ((bpb->sectors_cluster*bpb->bytes_sector)*(current_cluster - 2)));
+  if(!strcmp(path_copy, "/"))
+  {
+    //This is a hack
+    dir_entry->First_Cluster_High = 0xFF00 & bpb->root_cluster_number;
+    dir_entry->First_Cluster_Low = 0x00FF & bpb->root_cluster_number;
+    return dir_entry;
+  }
   while(token != NULL){
     //TODO: Create function that returns amount of clusters left in chain and use a while (hasn't reached last cluster+1) it continues and reads next cluster
     for(int x = 0; x < dir_entries_per_cluster; x++)
@@ -109,6 +137,8 @@ struct directory_entry* resolve(const char *path)
           int cluster = ((dir_entry->First_Cluster_High<<16)|dir_entry->First_Cluster_Low);
           device_read_sector(cluster_buffer, bpb->bytes_sector, bpb->sectors_cluster, clusters_offset + ((bpb->sectors_cluster*bpb->bytes_sector)*(cluster - 2)));
           token = strtok(NULL, "/");
+          if(token == NULL)
+            return dir_entry;
           break;
         }else{
           //This way we prevent errors when looking for folder has same name as a file
@@ -148,9 +178,9 @@ int is_dir_entry_empty(struct directory_entry *dir_entry)
   for(int x = 0; x < sizeof(struct directory_entry); x++)
   {
     if(*((int8_t*)dir_entry) != 0)
-      return 1;
+      return 0;
   }
-  return 0;
+  return 1;
 }
 
 //Printing only the relevant data
