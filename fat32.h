@@ -70,7 +70,9 @@ struct directory_entry {
 
 void print_bpb();
 void print_dir_entry();
-struct directory_entry* resolve(char *path);
+struct directory_entry* resolve(const char *path);
+int remaining_clusters(int starting_cluster);
+void get_next_cluster(int *current_cluster);
 int is_dir_entry_empty(struct directory_entry *dir_entry);
 void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg);
 int fat32_getattr (const char *path, struct stat *stbuf, struct fuse_file_info *fi);
@@ -84,5 +86,6 @@ static struct fuse_operations fuse_ops = {
 
 char *buffer, *cluster_buffer;
 int fat_offset, clusters_offset;
+uint32_t end_of_chain;
 
 #endif

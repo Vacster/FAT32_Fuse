@@ -21,6 +21,7 @@ void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
 
   fat_offset = bpb->reserved_sectors * bpb->bytes_sector;
   clusters_offset = fat_offset + (bpb->fat_amount * bpb->sectors_per_fat * bpb->bytes_sector);
+  device_read_sector((char*)&end_of_chain, 4, 1, fat_offset + 4);
 
   //Printing info of third(second?) file. Change multiplier to print another one.
   // device_read_sector((char*)dir_entry, sizeof(struct directory_entry), 1, clusters_offset+(32*2));
@@ -28,10 +29,11 @@ void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
   //
   // unsigned int next;
   // device_read_sector((char*)&next, sizeof(int), 1, fat_offset+(((dir_entry->First_Cluster_High<<16)|dir_entry->First_Cluster_Low) * 4));
-  char *path = strdup("/FOLDER/NEW_IMG");
-  struct directory_entry *dir_entry = resolve(path);
-  if(dir_entry != NULL)
-    print_dir_entry(dir_entry);
+  // struct directory_entry *dir_entry = resolve("/FOLDER/NEW_IMG");
+  // if(dir_entry != NULL)
+  //   print_dir_entry(dir_entry);
+
+  printf("remaining_clusters: %u\n", remaining_clusters(3));
   return NULL;
 }
 
@@ -54,7 +56,6 @@ int fat32_getattr (const char *path, struct stat *stbuf, struct fuse_file_info *
   stbuf->st_gid = getgid(); // The group of the file/directory is the same as the group of the user who mounted the filesystem
   stbuf->st_atime = time( NULL ); // The last "a"ccess of the file/directory is right now
   stbuf->st_mtime = time( NULL ); // The last "m"odification of the file/directory is right now
-
   if ( strcmp( path, "/" ) == 0 )
   {
     stbuf->st_mode = S_IFDIR | 0755;
@@ -62,9 +63,15 @@ int fat32_getattr (const char *path, struct stat *stbuf, struct fuse_file_info *
   }
   else
   {
-    stbuf->st_mode = S_IFREG | 0644;
-    stbuf->st_nlink = 1;
-    stbuf->st_size = 1024;
+    struct directory_entry *dir_entry = resolve(path);
+      printf("Here\n");
+    if(dir_entry != NULL){
+      printf("Here\n");
+      //TODO: Complex math for access dates and times
+      stbuf->st_mode = S_IFREG | 0644;
+      stbuf->st_nlink = 1;  //TODO: ?
+      stbuf->st_size = dir_entry->Filesize;
+    }
   }
 
   return 0;
@@ -78,14 +85,16 @@ int fat32_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t off
   return 0;
 }
 
-struct directory_entry* resolve(char *path)
+struct directory_entry* resolve(const char *path)
 {
-  device_read_sector(cluster_buffer, bpb->bytes_sector, bpb->sectors_cluster, clusters_offset + ((bpb->sectors_cluster*bpb->bytes_sector)*(bpb->root_cluster_number - 2)));
+  int current_cluster = bpb->root_cluster_number;
+
+  char *path_copy = strdup(path);
+  char *token = strtok(path_copy, "/");
+  int dir_entries_per_cluster = (bpb->sectors_cluster*bpb->bytes_sector) / sizeof(struct directory_entry);
   struct directory_entry *dir_entry = (struct directory_entry*) malloc(sizeof(struct directory_entry));
 
-  char *token = strtok(path, "/");
-  int dir_entries_per_cluster = (bpb->sectors_cluster*bpb->bytes_sector) / sizeof(struct directory_entry);
-
+  device_read_sector(cluster_buffer, bpb->bytes_sector, bpb->sectors_cluster, clusters_offset + ((bpb->sectors_cluster*bpb->bytes_sector)*(current_cluster - 2)));
   while(token != NULL){
     //TODO: Create function that returns amount of clusters left in chain and use a while (hasn't reached last cluster+1) it continues and reads next cluster
     for(int x = 0; x < dir_entries_per_cluster; x++)
@@ -104,12 +113,34 @@ struct directory_entry* resolve(char *path)
         }else{
           //This way we prevent errors when looking for folder has same name as a file
           token = strtok(NULL, "/");
+          free(path_copy);
           return token != NULL ? NULL : dir_entry;
         }
       }
     }
   }
+  free(path_copy);
   return NULL;
+}
+
+//Function that returns amount of clusters left in chain
+int remaining_clusters(int starting_cluster)
+{
+  int current_cluster = starting_cluster;
+  int remaining_clusters = 0;
+
+  do
+  {
+    //Reading one int at a time for convenience. Not efficient but prevents errors
+    get_next_cluster(&current_cluster);
+    remaining_clusters++;
+  } while(current_cluster != end_of_chain);
+  return remaining_clusters;
+}
+
+void get_next_cluster(int *current_cluster)
+{
+  device_read_sector((char*)current_cluster, sizeof(int), 1, fat_offset + (*current_cluster * 4));
 }
 
 int is_dir_entry_empty(struct directory_entry *dir_entry)

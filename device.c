@@ -28,6 +28,7 @@ void device_close()
     fclose(f);
 }
 
+//Consider using void pointers
 int device_read_sector(char buffer[], int size, int count, int offset)
 {
     fseek(f, offset, SEEK_SET);
