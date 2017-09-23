@@ -97,7 +97,6 @@ static struct fuse_operations fuse_ops = {
   .getattr    =   fat32_getattr,
 };
 
-char *buffer, *cluster_buffer;
 int fat_offset, clusters_offset;
 uint32_t end_of_chain;
 

@@ -16,9 +16,6 @@ void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
   device_read_sector((char*)bpb, sizeof(struct bios_param_block), 1, BPB_OFFSET);
   print_bpb();
 
-  buffer          =  (char*)malloc(bpb->bytes_sector);
-  cluster_buffer  =  (char*)malloc(bpb->bytes_sector * bpb->sectors_cluster);
-
   fat_offset = bpb->reserved_sectors * bpb->bytes_sector;
   clusters_offset = fat_offset + (bpb->fat_amount * bpb->sectors_per_fat * bpb->bytes_sector);
   device_read_sector((char*)&end_of_chain, 4, 1, fat_offset + 4);
@@ -94,7 +91,7 @@ int fat32_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t off
     if(is_dir_entry_empty(dir_entry))
       break;
 
-    if(*((uint8_t*)dir_entry) != 0x41 && *((uint8_t*)dir_entry) != 0xE5 && !(dir_entry->Attributes & (1<<3)))
+    if(*((uint8_t*)dir_entry) != 0xE5 && !(dir_entry->Attributes & (1<<3)) && !(dir_entry->Attributes & 1))
     {
       printf("--\n");
       print_dir_entry(dir_entry);
@@ -117,7 +114,7 @@ struct directory_entry* resolve(const char *path)
   char *token = strtok(path_copy, "/");
   int dir_entries_per_cluster = (bpb->sectors_cluster*bpb->bytes_sector) / sizeof(struct directory_entry);
   struct directory_entry *dir_entry = (struct directory_entry*) malloc(sizeof(struct directory_entry));
-
+  char *cluster_buffer = (char*)malloc(bpb->sectors_cluster*bpb->bytes_sector);
   device_read_sector(cluster_buffer, bpb->bytes_sector, bpb->sectors_cluster, clusters_offset + ((bpb->sectors_cluster*bpb->bytes_sector)*(current_cluster - 2)));
 
   if(!strcmp(path_copy, "/"))
@@ -132,12 +129,14 @@ struct directory_entry* resolve(const char *path)
     for(int x = 0; x < dir_entries_per_cluster; x++)
     {
       memcpy(dir_entry, cluster_buffer + (sizeof(struct directory_entry) * x), sizeof(struct directory_entry));
-      if(*((uint8_t*)dir_entry) == 0)
+      if(*((uint8_t*)dir_entry) == 0){
+        free(cluster_buffer);
         return NULL;
+      }
 
       char *lfn = get_long_filename(current_cluster, x);
       // printf("Comparing %s and %s\n", token, lfn);
-      if(!strncmp(token, lfn, strlen(token)))
+      if(!strncmp(token, lfn, strlen(lfn)+1))
       {
         free(lfn);
         //If the file found is a Directory
@@ -146,14 +145,17 @@ struct directory_entry* resolve(const char *path)
           current_cluster = ((dir_entry->First_Cluster_High<<16)|dir_entry->First_Cluster_Low);
           device_read_sector(cluster_buffer, bpb->bytes_sector, bpb->sectors_cluster, clusters_offset + ((bpb->sectors_cluster*bpb->bytes_sector)*(current_cluster - 2)));
           token = strtok(NULL, "/");
-          if(token == NULL)
+          if(token == NULL){
+            free(cluster_buffer);
             return dir_entry;
+          }
           x = 0;
           break;
         }else{
           //This way we prevent errors when looking for folder has same name as a file
           token = strtok(NULL, "/");
           free(path_copy);
+          free(cluster_buffer);
           return token != NULL ? NULL : dir_entry;
         }
       }else
@@ -232,6 +234,7 @@ char *get_long_filename(int cluster, int entry)
       memcpy(&lfn_entry, tmp_cluster_buffer + (sizeof(struct long_filename_entry)*(entry-x-1)), sizeof(struct long_filename_entry));
     }
   }
+  free(tmp_cluster_buffer);
   return name;
 }
 
