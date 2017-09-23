@@ -66,14 +66,27 @@ struct directory_entry {
   int16_t First_Cluster_Low;
   int32_t Filesize;
 };
+
+struct long_filename_entry {
+  uint8_t   sequence_number;
+  uint16_t  name_1[5];
+  uint8_t   attribute;      //Always 0x0F
+  uint8_t   type;
+  uint8_t   checksum;
+  uint16_t  name_2[6];
+  uint16_t  first_cluster;  //Always 0x0;
+  uint16_t  name_3[2];
+};
 #pragma pack(pop)
 
 void print_bpb();
 void print_dir_entry();
-struct directory_entry* resolve(const char *path);
-int remaining_clusters(int starting_cluster);
 void get_next_cluster(int *current_cluster);
+char *get_long_filename(struct directory_entry *dir_entry);
+int remaining_clusters(int starting_cluster);
 int is_dir_entry_empty(struct directory_entry *dir_entry);
+struct directory_entry* resolve(const char *path);
+
 void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg);
 int fat32_getattr (const char *path, struct stat *stbuf, struct fuse_file_info *fi);
 int fat32_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi, enum fuse_readdir_flags flags);

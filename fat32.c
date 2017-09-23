@@ -29,10 +29,13 @@ void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
   //
   // unsigned int next;
   // device_read_sector((char*)&next, sizeof(int), 1, fat_offset+(((dir_entry->First_Cluster_High<<16)|dir_entry->First_Cluster_Low) * 4));
-  // struct directory_entry *dir_entry = resolve("/FOLDER");
-  // if(dir_entry != NULL)
-  //   print_dir_entry(dir_entry);
-
+  struct directory_entry *dir_entry = resolve("/FOLDER/NEW_IMG");
+  if(dir_entry != NULL){
+    print_dir_entry(dir_entry);
+    printf("LFN: %s\n", get_long_filename(dir_entry));
+  }else{
+    printf("Not Found\n");
+  }
   // printf("remaining_clusters: %u\n", remaining_clusters(3));
   return NULL;
 }
@@ -108,6 +111,7 @@ int fat32_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t off
 
 struct directory_entry* resolve(const char *path)
 {
+  printf("[RESOLVE] %s\n", path);
   int current_cluster = bpb->root_cluster_number;
 
   char *path_copy = strdup(path);
@@ -128,6 +132,8 @@ struct directory_entry* resolve(const char *path)
     for(int x = 0; x < dir_entries_per_cluster; x++)
     {
       memcpy(dir_entry, cluster_buffer + (sizeof(struct directory_entry) * x), sizeof(struct directory_entry));
+      if(*((uint8_t*)dir_entry) == 0)
+        return NULL;
 
       if(!strncmp(token, dir_entry->Short_Filename, strlen(token)))
       {
@@ -139,6 +145,7 @@ struct directory_entry* resolve(const char *path)
           token = strtok(NULL, "/");
           if(token == NULL)
             return dir_entry;
+          x = 0;
           break;
         }else{
           //This way we prevent errors when looking for folder has same name as a file
@@ -183,6 +190,32 @@ int is_dir_entry_empty(struct directory_entry *dir_entry)
   return 1;
 }
 
+//Should remember to free after use
+char *get_long_filename(struct directory_entry *dir_entry)
+{
+  struct long_filename_entry *lfn_entry = (struct long_filename_entry*)dir_entry;
+
+  //Look for 1st LFN entry
+  while((lfn_entry->sequence_number & 0xF0) != 1){
+    printf("Hello\n");
+    lfn_entry -= sizeof(struct long_filename_entry);
+  }
+  printf("Fin\n");
+
+  char *name = (char*)malloc(sizeof(char) * 255); //Max name size (should be 260 but fuck life)
+   //Max Dir entries concatenated
+  for(int x = 0, y = 0; x < 20 && lfn_entry->attribute == 0x0F; x++, lfn_entry -= sizeof(struct long_filename_entry))
+  {
+    int z;
+    for(z = 0; z < 5; z++)
+      name[y++] = lfn_entry->name_1[z] & 0x0F;
+    for(z = 0; z < 6; z++)
+      name[y++] = lfn_entry->name_2[z] & 0x0F;
+    for(z = 0; z < 2; z++)
+      name[y++] = lfn_entry->name_3[z] & 0x0F;
+  }
+  return name;
+}
 //Printing only the relevant data
 void print_bpb()
 {
