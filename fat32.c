@@ -29,21 +29,19 @@ void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
   //
   // unsigned int next;
   // device_read_sector((char*)&next, sizeof(int), 1, fat_offset+(((dir_entry->First_Cluster_High<<16)|dir_entry->First_Cluster_Low) * 4));
-  struct directory_entry *dir_entry = resolve("/FOLDER/NEW_IMG");
-  if(dir_entry != NULL){
-    print_dir_entry(dir_entry);
-    printf("LFN: %s\n", get_long_filename(dir_entry));
-  }else{
-    printf("Not Found\n");
-  }
+  // struct directory_entry *dir_entry = resolve("/folder");
+  // if(dir_entry != NULL){
+  //   print_dir_entry(dir_entry);
+  // }else{
+  //   printf("Not Found\n");
+  // }
   // printf("remaining_clusters: %u\n", remaining_clusters(3));
   return NULL;
 }
 
 int fat32_getattr (const char *path, struct stat *stbuf, struct fuse_file_info *fi)
 {
-  printf("[GETATTR]\n");
-  printf( "\tAttributes of %s requested\n", path );
+  printf("[GETATTR] %s\n", path);
 
   // GNU's definitions of the attributes (http://www.gnu.org/software/libc/manual/html_node/Attribute-Meanings.html):
   // 		st_uid: 	The user ID of the file’s owner.
@@ -83,26 +81,27 @@ int fat32_getattr (const char *path, struct stat *stbuf, struct fuse_file_info *
 
 int fat32_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi, enum fuse_readdir_flags flags)
 {
-  printf("[READDIR]\n");
+  printf("[READDIR] %s\n", path);
 
   struct directory_entry *dir_entry = resolve(path);
   int cluster = ((dir_entry->First_Cluster_High<<16)|dir_entry->First_Cluster_Low);
   int dir_entries_per_cluster = (bpb->sectors_cluster*bpb->bytes_sector) / sizeof(struct directory_entry);
-  device_read_sector(cluster_buffer, bpb->bytes_sector, bpb->sectors_cluster, clusters_offset + ((bpb->sectors_cluster*bpb->bytes_sector)*(cluster - 2)));
+  char *clust_buffer = (char*)malloc(bpb->sectors_cluster*bpb->bytes_sector);
+  device_read_sector(clust_buffer, bpb->bytes_sector, bpb->sectors_cluster, clusters_offset + ((bpb->sectors_cluster*bpb->bytes_sector)*(cluster - 2)));
   for(int x = 0; x < dir_entries_per_cluster; x ++)
   {
-    memcpy(dir_entry, cluster_buffer + (sizeof(struct directory_entry) * x), sizeof(struct directory_entry));
-
+    memcpy(dir_entry, clust_buffer + (sizeof(struct directory_entry) * x), sizeof(struct directory_entry));
     if(is_dir_entry_empty(dir_entry))
       break;
 
     if(*((uint8_t*)dir_entry) != 0x41 && *((uint8_t*)dir_entry) != 0xE5 && !(dir_entry->Attributes & (1<<3)))
     {
-      //Hack
-      char name[9];
-      name[8] = '\0';
-      strncpy(name, dir_entry->Short_Filename, 8);
+      printf("--\n");
+      print_dir_entry(dir_entry);
+      printf("--\n");
+      char *name = get_long_filename(cluster, x);
       filler(buf, name, NULL, 0, FUSE_FILL_DIR_PLUS);
+      free(name);
     }
   }
 
@@ -120,6 +119,7 @@ struct directory_entry* resolve(const char *path)
   struct directory_entry *dir_entry = (struct directory_entry*) malloc(sizeof(struct directory_entry));
 
   device_read_sector(cluster_buffer, bpb->bytes_sector, bpb->sectors_cluster, clusters_offset + ((bpb->sectors_cluster*bpb->bytes_sector)*(current_cluster - 2)));
+
   if(!strcmp(path_copy, "/"))
   {
     //This is a hack
@@ -127,21 +127,24 @@ struct directory_entry* resolve(const char *path)
     dir_entry->First_Cluster_Low = 0x00FF & bpb->root_cluster_number;
     return dir_entry;
   }
+
   while(token != NULL){
-    //TODO: Create function that returns amount of clusters left in chain and use a while (hasn't reached last cluster+1) it continues and reads next cluster
     for(int x = 0; x < dir_entries_per_cluster; x++)
     {
       memcpy(dir_entry, cluster_buffer + (sizeof(struct directory_entry) * x), sizeof(struct directory_entry));
       if(*((uint8_t*)dir_entry) == 0)
         return NULL;
 
-      if(!strncmp(token, dir_entry->Short_Filename, strlen(token)))
+      char *lfn = get_long_filename(current_cluster, x);
+      // printf("Comparing %s and %s\n", token, lfn);
+      if(!strncmp(token, lfn, strlen(token)))
       {
+        free(lfn);
         //If the file found is a Directory
         if(dir_entry->Attributes & 0b00010000)
         {
-          int cluster = ((dir_entry->First_Cluster_High<<16)|dir_entry->First_Cluster_Low);
-          device_read_sector(cluster_buffer, bpb->bytes_sector, bpb->sectors_cluster, clusters_offset + ((bpb->sectors_cluster*bpb->bytes_sector)*(cluster - 2)));
+          current_cluster = ((dir_entry->First_Cluster_High<<16)|dir_entry->First_Cluster_Low);
+          device_read_sector(cluster_buffer, bpb->bytes_sector, bpb->sectors_cluster, clusters_offset + ((bpb->sectors_cluster*bpb->bytes_sector)*(current_cluster - 2)));
           token = strtok(NULL, "/");
           if(token == NULL)
             return dir_entry;
@@ -153,7 +156,8 @@ struct directory_entry* resolve(const char *path)
           free(path_copy);
           return token != NULL ? NULL : dir_entry;
         }
-      }
+      }else
+        free(lfn);
     }
   }
   free(path_copy);
@@ -191,28 +195,41 @@ int is_dir_entry_empty(struct directory_entry *dir_entry)
 }
 
 //Should remember to free after use
-char *get_long_filename(struct directory_entry *dir_entry)
+char *get_long_filename(int cluster, int entry)
 {
-  struct long_filename_entry *lfn_entry = (struct long_filename_entry*)dir_entry;
-
-  //Look for 1st LFN entry
-  while((lfn_entry->sequence_number & 0xF0) != 1){
-    printf("Hello\n");
-    lfn_entry -= sizeof(struct long_filename_entry);
-  }
-  printf("Fin\n");
+  // printf("[GET_LONG_FILENAME]\n");
+  char *tmp_cluster_buffer = (char*)malloc(bpb->bytes_sector * bpb->sectors_cluster);
+  device_read_sector(tmp_cluster_buffer, bpb->bytes_sector, bpb->sectors_cluster, clusters_offset + ((bpb->sectors_cluster*bpb->bytes_sector)*(cluster - 2)));
+  struct directory_entry special_dir;
+  struct long_filename_entry lfn_entry;
 
   char *name = (char*)malloc(sizeof(char) * 255); //Max name size (should be 260 but fuck life)
-   //Max Dir entries concatenated
-  for(int x = 0, y = 0; x < 20 && lfn_entry->attribute == 0x0F; x++, lfn_entry -= sizeof(struct long_filename_entry))
-  {
-    int z;
-    for(z = 0; z < 5; z++)
-      name[y++] = lfn_entry->name_1[z] & 0x0F;
-    for(z = 0; z < 6; z++)
-      name[y++] = lfn_entry->name_2[z] & 0x0F;
-    for(z = 0; z < 2; z++)
-      name[y++] = lfn_entry->name_3[z] & 0x0F;
+
+  //Special cases are obligatory
+  memcpy(&special_dir, cluster_buffer + (sizeof(struct long_filename_entry)*(entry)), sizeof(struct long_filename_entry));
+  if(!strncmp("..", special_dir.Short_Filename, 2)){
+    strncpy(name, "..", 3);
+  }else if(!strncmp(".", special_dir.Short_Filename, 1)){
+    strncpy(name, ".", 2);
+  }else{
+    // Look for 1st LFN entry. 20 is max number of lfn dirs
+    for(int x = 0; x < 20; x++)
+    {
+      memcpy(&lfn_entry, cluster_buffer + (sizeof(struct long_filename_entry)*(entry-x-1)), sizeof(struct long_filename_entry));
+      if(lfn_entry.sequence_number & 0x0F)
+        break;
+    }
+
+    for(int x = 0, y = 0; x < 20 && lfn_entry.attribute == 15; x++)
+    {
+      int z;
+      for(z = 0; z < 5; z++)
+        name[y++] = lfn_entry.name_1[z*2];
+      for(z = 0; z < 6; z++)
+        name[y++] = lfn_entry.name_2[z*2];
+      for(z = 0; z < 2; z++)
+        name[y++] = lfn_entry.name_3[z*2];
+    }
   }
   return name;
 }

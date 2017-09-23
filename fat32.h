@@ -69,20 +69,20 @@ struct directory_entry {
 
 struct long_filename_entry {
   uint8_t   sequence_number;
-  uint16_t  name_1[5];
+  uint8_t   name_1[10];
   uint8_t   attribute;      //Always 0x0F
   uint8_t   type;
   uint8_t   checksum;
-  uint16_t  name_2[6];
+  uint8_t  name_2[12];
   uint16_t  first_cluster;  //Always 0x0;
-  uint16_t  name_3[2];
+  uint8_t  name_3[4];
 };
 #pragma pack(pop)
 
 void print_bpb();
 void print_dir_entry();
 void get_next_cluster(int *current_cluster);
-char *get_long_filename(struct directory_entry *dir_entry);
+char *get_long_filename(int cluster, int entry);
 int remaining_clusters(int starting_cluster);
 int is_dir_entry_empty(struct directory_entry *dir_entry);
 struct directory_entry* resolve(const char *path);
