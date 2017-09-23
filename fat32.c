@@ -206,7 +206,7 @@ char *get_long_filename(int cluster, int entry)
   char *name = (char*)malloc(sizeof(char) * 255); //Max name size (should be 260 but fuck life)
 
   //Special cases are obligatory
-  memcpy(&special_dir, cluster_buffer + (sizeof(struct long_filename_entry)*(entry)), sizeof(struct long_filename_entry));
+  memcpy(&special_dir, tmp_cluster_buffer + (sizeof(struct long_filename_entry)*(entry)), sizeof(struct long_filename_entry));
   if(!strncmp("..", special_dir.Short_Filename, 2)){
     strncpy(name, "..", 3);
   }else if(!strncmp(".", special_dir.Short_Filename, 1)){
@@ -215,7 +215,7 @@ char *get_long_filename(int cluster, int entry)
     // Look for 1st LFN entry. 20 is max number of lfn dirs
     for(int x = 0; x < 20; x++)
     {
-      memcpy(&lfn_entry, cluster_buffer + (sizeof(struct long_filename_entry)*(entry-x-1)), sizeof(struct long_filename_entry));
+      memcpy(&lfn_entry, tmp_cluster_buffer + (sizeof(struct long_filename_entry)*(entry-x-1)), sizeof(struct long_filename_entry));
       if(lfn_entry.sequence_number & 0x0F)
         break;
     }
@@ -229,7 +229,7 @@ char *get_long_filename(int cluster, int entry)
         name[y++] = lfn_entry.name_2[z*2];
       for(z = 0; z < 2; z++)
         name[y++] = lfn_entry.name_3[z*2];
-      memcpy(&lfn_entry, cluster_buffer + (sizeof(struct long_filename_entry)*(entry-x-1)), sizeof(struct long_filename_entry));  
+      memcpy(&lfn_entry, tmp_cluster_buffer + (sizeof(struct long_filename_entry)*(entry-x-1)), sizeof(struct long_filename_entry));
     }
   }
   return name;
