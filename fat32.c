@@ -229,10 +229,12 @@ char *get_long_filename(int cluster, int entry)
         name[y++] = lfn_entry.name_2[z*2];
       for(z = 0; z < 2; z++)
         name[y++] = lfn_entry.name_3[z*2];
+      memcpy(&lfn_entry, cluster_buffer + (sizeof(struct long_filename_entry)*(entry-x-1)), sizeof(struct long_filename_entry));  
     }
   }
   return name;
 }
+
 //Printing only the relevant data
 void print_bpb()
 {

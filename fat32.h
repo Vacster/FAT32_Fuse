@@ -73,9 +73,9 @@ struct long_filename_entry {
   uint8_t   attribute;      //Always 0x0F
   uint8_t   type;
   uint8_t   checksum;
-  uint8_t  name_2[12];
+  uint8_t   name_2[12];
   uint16_t  first_cluster;  //Always 0x0;
-  uint8_t  name_3[4];
+  uint8_t   name_3[4];
 };
 #pragma pack(pop)
 
