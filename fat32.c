@@ -34,6 +34,11 @@ void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
   //   printf("Not Found\n");
   // }
   // printf("remaining_clusters: %"PRId64"\n", remaining_clusters(207));
+  uint32_t x = 12;
+  printf("FUCK: %"PRId32"\n", x);
+  get_next_cluster(&x);
+  printf("FUCK: %"PRId32"\n", x);
+
   return NULL;
 }
 
@@ -126,12 +131,14 @@ int fat32_open(const char* path, struct fuse_file_info* fi)
 
 int fat32_read(const char* path, char *buf, size_t size, off_t offset, struct fuse_file_info* fi)
 {
+  pthread_mutex_lock(&read_mutex);
   printf("[READ] %s, %lu, %lu\n", path, size, offset);
   struct directory_entry *dir_entry = resolve(path);
   if(dir_entry == NULL || !fi->fh)
   {
     printf("Path is nonexistant");
     free(dir_entry);
+    pthread_mutex_unlock(&read_mutex);
     return -1;
   }
 
@@ -140,26 +147,27 @@ int fat32_read(const char* path, char *buf, size_t size, off_t offset, struct fu
   int return_size = 0;
 
   int cluster_offsets = floor(offset/cluster_size);
-  uint64_t current_cluster = fi->fh;
+  uint32_t current_cluster = (uint32_t)fi->fh;
   offset -= cluster_offsets * cluster_size;
 
   for(int x = 0; x < cluster_offsets; x++, get_next_cluster(&current_cluster));
 
-  char *cluster_buffer = (char*)malloc(cluster_size);
-  for(int x = 0; x < ceil(size/cluster_size); x++){
-    printf("CO: %d\t\tOff: %lu\t\tCC: %"PRId64"\n", cluster_offsets, offset, current_cluster);
-    device_read_sector(cluster_buffer, cluster_size, 1, clusters_offset + (cluster_size * (current_cluster - 2)));
-    memcpy(buf + (x * cluster_size), cluster_buffer + (!x ? offset : 0), cluster_size);
-    return_size += cluster_size;
+  char *cluster_buffer = (char*)malloc(size);
+  for(int x = 0; x < ceil((size*1.0)/cluster_size); x++){
+    printf("CO: %d\t\tOff: %lu\t\tCC: %"PRId32"\t\tCount: %d\n", cluster_offsets, offset, current_cluster, x);
+
+    //On the first read (!x) we take in count the remaining offset that is not divisible by cluster_size
+    device_read_sector(cluster_buffer + (x * cluster_size), cluster_size - (!x ? offset : 0), 1, (!x ? offset : 0) + clusters_offset + (cluster_size * (current_cluster - 2)));
 
     if(!remaining_clusters(current_cluster))
       break;
-    else
-      get_next_cluster(&current_cluster);
+    get_next_cluster(&current_cluster);
   }
+  memcpy(buf, cluster_buffer, size);
   free(dir_entry);
   free(cluster_buffer);
-  return return_size;
+  pthread_mutex_unlock(&read_mutex);
+  return size;
 }
 
 struct directory_entry *resolve(const char *path)
@@ -226,10 +234,10 @@ struct directory_entry *resolve(const char *path)
 }
 
 //Function that returns amount of clusters left in chain
-uint64_t remaining_clusters(uint64_t starting_cluster)
+uint32_t remaining_clusters(uint32_t starting_cluster)
 {
-  uint64_t current_cluster = starting_cluster;
-  int remaining_clusters = 0;
+  uint32_t current_cluster = starting_cluster;
+  uint32_t remaining_clusters = 0;
 
   do
   {
@@ -240,9 +248,9 @@ uint64_t remaining_clusters(uint64_t starting_cluster)
   return remaining_clusters - 1;
 }
 
-void get_next_cluster(uint64_t *current_cluster)
+void get_next_cluster(uint32_t *current_cluster)
 {
-  device_read_sector((char*)current_cluster, sizeof(uint64_t), 1, fat_offset + (*current_cluster * 4));
+  device_read_sector((char*)current_cluster, sizeof(uint32_t), 1, fat_offset + (*current_cluster * 4));
 }
 
 int is_dir_entry_empty(struct directory_entry *dir_entry)

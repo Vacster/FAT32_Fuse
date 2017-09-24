@@ -5,6 +5,7 @@
 
 #include <fuse.h>
 #include <stdint.h>
+#include <pthread.h>
 
 //Prevents Padding
 #pragma pack(push,1)
@@ -81,9 +82,9 @@ struct long_filename_entry {
 
 void print_bpb();
 void print_dir_entry();
-void get_next_cluster(uint64_t *current_cluster);
+void get_next_cluster(uint32_t *current_cluster);
 char *get_long_filename(int cluster, int entry);
-uint64_t remaining_clusters(uint64_t starting_cluster);
+uint32_t remaining_clusters(uint32_t starting_cluster);
 int is_dir_entry_empty(struct directory_entry *dir_entry);
 struct directory_entry* resolve(const char *path);
 
@@ -103,5 +104,6 @@ static struct fuse_operations fuse_ops = {
 
 int fat_offset, clusters_offset;
 uint32_t end_of_chain;
+pthread_mutex_t read_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #endif
