@@ -1,6 +1,7 @@
 #include "device.h"
 #include "fat32.h"
 
+#include <math.h>
 #include <inttypes.h>
 #include <string.h>
 #include <unistd.h>
@@ -32,7 +33,7 @@ void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
   // }else{
   //   printf("Not Found\n");
   // }
-  // printf("remaining_clusters: %u\n", remaining_clusters(3));
+  // printf("remaining_clusters: %"PRId64"\n", remaining_clusters(207));
   return NULL;
 }
 
@@ -105,7 +106,63 @@ int fat32_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t off
   return 0;
 }
 
-struct directory_entry* resolve(const char *path)
+int fat32_open(const char* path, struct fuse_file_info* fi)
+{
+  printf("[OPEN] %s\n", path);
+  struct directory_entry *dir_entry = resolve(path);
+  if(dir_entry == NULL)
+  {
+    printf("Path is nonexistant");
+    free(dir_entry);
+    return -1;
+  }
+
+  //File handler in this case is simply the cluster in which it begins
+  fi->fh = ((dir_entry->First_Cluster_High<<16)|dir_entry->First_Cluster_Low);
+  printf("File Opened Succesfully!\nCluster: %"PRId64"\n", fi->fh);
+  free(dir_entry);
+  return 0;
+}
+
+int fat32_read(const char* path, char *buf, size_t size, off_t offset, struct fuse_file_info* fi)
+{
+  printf("[READ] %s, %lu, %lu\n", path, size, offset);
+  struct directory_entry *dir_entry = resolve(path);
+  if(dir_entry == NULL || !fi->fh)
+  {
+    printf("Path is nonexistant");
+    free(dir_entry);
+    return -1;
+  }
+
+  printf("Cluster: %" PRId64 "\n", fi->fh);
+  int cluster_size = (bpb->sectors_cluster*bpb->bytes_sector);
+  int return_size = 0;
+
+  int cluster_offsets = floor(offset/cluster_size);
+  uint64_t current_cluster = fi->fh;
+  offset -= cluster_offsets * cluster_size;
+
+  for(int x = 0; x < cluster_offsets; x++, get_next_cluster(&current_cluster));
+
+  char *cluster_buffer = (char*)malloc(cluster_size);
+  for(int x = 0; x < ceil(size/cluster_size); x++){
+    printf("CO: %d\t\tOff: %lu\t\tCC: %"PRId64"\n", cluster_offsets, offset, current_cluster);
+    device_read_sector(cluster_buffer, cluster_size, 1, clusters_offset + (cluster_size * (current_cluster - 2)));
+    memcpy(buf + (x * cluster_size), cluster_buffer + (!x ? offset : 0), cluster_size);
+    return_size += cluster_size;
+
+    if(!remaining_clusters(current_cluster))
+      break;
+    else
+      get_next_cluster(&current_cluster);
+  }
+  free(dir_entry);
+  free(cluster_buffer);
+  return return_size;
+}
+
+struct directory_entry *resolve(const char *path)
 {
   printf("[RESOLVE] %s\n", path);
   int current_cluster = bpb->root_cluster_number;
@@ -131,6 +188,7 @@ struct directory_entry* resolve(const char *path)
       memcpy(dir_entry, cluster_buffer + (sizeof(struct directory_entry) * x), sizeof(struct directory_entry));
       if(*((uint8_t*)dir_entry) == 0){
         free(cluster_buffer);
+        free(dir_entry);
         return NULL;
       }
 
@@ -163,13 +221,14 @@ struct directory_entry* resolve(const char *path)
     }
   }
   free(path_copy);
+  free(dir_entry);
   return NULL;
 }
 
 //Function that returns amount of clusters left in chain
-int remaining_clusters(int starting_cluster)
+uint64_t remaining_clusters(uint64_t starting_cluster)
 {
-  int current_cluster = starting_cluster;
+  uint64_t current_cluster = starting_cluster;
   int remaining_clusters = 0;
 
   do
@@ -178,12 +237,12 @@ int remaining_clusters(int starting_cluster)
     get_next_cluster(&current_cluster);
     remaining_clusters++;
   } while(current_cluster != end_of_chain);
-  return remaining_clusters;
+  return remaining_clusters - 1;
 }
 
-void get_next_cluster(int *current_cluster)
+void get_next_cluster(uint64_t *current_cluster)
 {
-  device_read_sector((char*)current_cluster, sizeof(int), 1, fat_offset + (*current_cluster * 4));
+  device_read_sector((char*)current_cluster, sizeof(uint64_t), 1, fat_offset + (*current_cluster * 4));
 }
 
 int is_dir_entry_empty(struct directory_entry *dir_entry)
@@ -215,14 +274,9 @@ char *get_long_filename(int cluster, int entry)
     strncpy(name, ".", 2);
   }else{
     // Look for 1st LFN entry. 20 is max number of lfn dirs
-    for(int x = 0; x < 20; x++)
-    {
-      memcpy(&lfn_entry, tmp_cluster_buffer + (sizeof(struct long_filename_entry)*(entry-x-1)), sizeof(struct long_filename_entry));
-      if(lfn_entry.sequence_number & 0x0F)
-        break;
-    }
 
-    for(int x = 0, y = 0; x < 20 && lfn_entry.attribute == 15; x++)
+    memcpy(&lfn_entry, tmp_cluster_buffer + (sizeof(struct long_filename_entry)*(entry-1)), sizeof(struct long_filename_entry));
+    for(int x = 1, y = 0; x < 20 && lfn_entry.attribute == 15; x++)
     {
       int z;
       for(z = 0; z < 5; z++)

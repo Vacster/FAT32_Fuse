@@ -1,5 +1,5 @@
 CFLAGS = -g -Wall -DFUSE_USE_VERSION=30 `pkg-config fuse --cflags`
-LINKFLAGS = -Wall `pkg-config fuse --libs`
+LINKFLAGS = -Wall -lm `pkg-config fuse --libs`
 
 all: bin/fat32
 
