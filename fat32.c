@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
 
 void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
 {
@@ -20,25 +21,6 @@ void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
   fat_offset = bpb->reserved_sectors * bpb->bytes_sector;
   clusters_offset = fat_offset + (bpb->fat_amount * bpb->sectors_per_fat * bpb->bytes_sector);
   device_read_sector((char*)&end_of_chain, 4, 1, fat_offset + 4);
-  // printf("%d\n",clusters_offset);
-  //Printing info of third(second?) file. Change multiplier to print another one.
-  // device_read_sector((char*)dir_entry, sizeof(struct directory_entry), 1, clusters_offset+(32*2));
-  // print_dir_entry();
-  //
-  // unsigned int next;
-  // device_read_sector((char*)&next, sizeof(int), 1, fat_offset+(((dir_entry->First_Cluster_High<<16)|dir_entry->First_Cluster_Low) * 4));
-  // struct directory_entry *dir_entry = resolve("/folder");
-  // if(dir_entry != NULL){
-  //   print_dir_entry(dir_entry);
-  // }else{
-  //   printf("Not Found\n");
-  // }
-  // printf("remaining_clusters: %"PRId64"\n", remaining_clusters(207));
-  // uint32_t x = 12;
-  // printf("FUCK: %"PRId32"\n", x);
-  // get_next_cluster(&x);
-  // printf("FUCK: %"PRId32"\n", x);
-
   return NULL;
 }
 
@@ -56,7 +38,7 @@ int fat32_getattr (const char *path, struct stat *stbuf, struct fuse_file_info *
   //						as no process still holds it open. Symbolic links are not counted in the total.
   //		st_size:	This specifies the size of a regular file in bytes. For files that are really devices this field isn’t usually meaningful. For symbolic links this specifies the length of the file name the link refers to.
 
-  stbuf->st_uid = getuid(); // The owner of the file/directory is the user who mounted the filesystem
+  stbuf->st_uid = getuid(); // 1The owner of the file/directory is the user who mounted the filesystem
   stbuf->st_gid = getgid(); // The group of the file/directory is the same as the group of the user who mounted the filesystem
   stbuf->st_atime = time( NULL ); // The last "a"ccess of the file/directory is right now
   stbuf->st_mtime = time( NULL ); // The last "m"odification of the file/directory is right now
@@ -114,26 +96,39 @@ int fat32_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t off
   return 0;
 }
 
+//Found online, simple helper for truncate
+void replaceLast(char * str, char oldChar, char newChar, int *lastIndex)
+{
+    int i;
+
+    i = 0;
+
+    while(str[i] != '\0')
+    {
+        if(str[i] == oldChar)
+            *lastIndex = i;
+        i++;
+    }
+
+    if(*lastIndex != -1)
+        str[*lastIndex] = newChar;
+}
+
 int fat32_truncate(const char *path, off_t size, struct fuse_file_info *fi)
 {
-  printf("[TRUNCATE] %s %lu\n", path, size);
+  printf("[TRUNCATE] %s %jd\n", path, size);
   struct directory_entry *dir_entry = resolve(path);
   if(dir_entry == NULL)
   {
     printf("Path is nonexistant");
     free(dir_entry);
-    return -1;
+    return -ENOENT;
   }
   dir_entry->Filesize = size;
 
-  int y;
   char *path_cpy = strdup(path);
-  for(y = strlen(path) - 1; y > 0; y--)
-    if(path[y] == '/')
-    {
-      path_cpy[y] = '\0';
-      break;
-    }
+  int last_index = -1;
+  replaceLast(path_cpy, '/', '\0', &last_index);
 
   int64_t parent_cluster;
   if(strlen(path_cpy))   //If not root
@@ -143,25 +138,25 @@ int fat32_truncate(const char *path, off_t size, struct fuse_file_info *fi)
     {
       printf("Parent is nonexistant");
       free(parent_entry);
-      return -1;
+      return -ENOENT;
     }
-    parent_cluster = ((parent_entry->First_Cluster_High<<16)|parent_entry->First_Cluster_Low) - 2;
+    parent_cluster = ((parent_entry->First_Cluster_High<<16)|parent_entry->First_Cluster_Low);
   }else
-    parent_cluster = bpb->root_cluster_number - 2;
+    parent_cluster = bpb->root_cluster_number;
 
   for(int x = 0; x < (bpb->sectors_cluster * bpb->bytes_sector)/sizeof(struct directory_entry); x++)
   {
     char *lfn = get_long_filename(parent_cluster, x);
-    if(!strcmp(lfn, path+y+1))
+    if(!strcmp(lfn, path_cpy + last_index + 1))
     {
-      device_write_sector((char*)dir_entry, sizeof(dir_entry), 1, clusters_offset + (parent_cluster * (bpb->sectors_cluster * bpb->bytes_sector)) + (x * sizeof(dir_entry)));
+      device_write_sector((char*)dir_entry, sizeof(dir_entry), 1, clusters_offset + ((parent_cluster - 2) * (bpb->sectors_cluster * bpb->bytes_sector)) + (x * sizeof(dir_entry)));
       free(dir_entry);
       free(lfn);
       return 0;
     }
     free(lfn);
   }
-  return -1;
+  return 0;
 }
 
 int fat32_write(const char *path, const char *buffer, size_t size, off_t offset, struct fuse_file_info * fi)
@@ -173,7 +168,7 @@ int fat32_write(const char *path, const char *buffer, size_t size, off_t offset,
   {
     printf("Path is nonexistant");
     free(dir_entry);
-    return -1;
+    return -ENOENT;
   }
   uint32_t next = (uint32_t)fi->fh;
   // uint32_t last;
@@ -189,7 +184,7 @@ int fat32_write(const char *path, const char *buffer, size_t size, off_t offset,
     device_write_sector(cluster_buffer, cluster_size, 1, clusters_offset + (cluster_size * (next - 2)));
     // last = next;
   }
-  // for(; write_count < size/cluster_size; write_count += cluster_size)
+  // for(; write_count < size/cluster_size; write_cou1nt += cluster_size)
   // {
   //   next = get_free_fat();
   //   device_write_sector((char*)&next, sizeof(next), 1, fat_offset + (last * 4));
@@ -213,7 +208,7 @@ int fat32_open(const char* path, struct fuse_file_info* fi)
   {
     printf("Path is nonexistant");
     free(dir_entry);
-    return -1;
+    return -ENOENT;
   }
 
   //File handler in this case is simply the cluster in which it begins
@@ -233,7 +228,7 @@ int fat32_read(const char* path, char *buf, size_t size, off_t offset, struct fu
     printf("Path is nonexistant");
     free(dir_entry);
     pthread_mutex_unlock(&read_mutex);
-    return -1;
+    return -ENOENT;
   }
 
   printf("Cluster: %" PRId64 "\n", fi->fh);
@@ -280,6 +275,7 @@ struct directory_entry *resolve(const char *path)
     //This is a hack
     dir_entry->First_Cluster_High = 0xFF00 & bpb->root_cluster_number;
     dir_entry->First_Cluster_Low = 0x00FF & bpb->root_cluster_number;
+    dir_entry->Attributes = 1; //Hidden
     return dir_entry;
   }
 
@@ -324,6 +320,11 @@ struct directory_entry *resolve(const char *path)
   free(path_copy);
   free(dir_entry);
   return NULL;
+}
+
+int fat32_create (const char *path, mode_t mode, struct fuse_file_info *fi)
+{
+
 }
 
 //Function that returns amount of clusters left in chain
