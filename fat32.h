@@ -82,6 +82,7 @@ struct long_filename_entry {
 
 void print_bpb();
 void print_dir_entry();
+int get_free_fat();
 void get_next_cluster(uint32_t *current_cluster);
 char *get_long_filename(int cluster, int entry);
 uint32_t remaining_clusters(uint32_t starting_cluster);
@@ -93,6 +94,8 @@ int fat32_open(const char* path, struct fuse_file_info* fi);
 int fat32_read(const char* path, char *buf, size_t size, off_t offset, struct fuse_file_info* fi);
 int fat32_getattr (const char *path, struct stat *stbuf, struct fuse_file_info *fi);
 int fat32_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi, enum fuse_readdir_flags flags);
+int fat32_write(const char *path, const char *buffer, size_t size, off_t offset, struct fuse_file_info * fi);
+int fat32_truncate(const char *path, off_t size, struct fuse_file_info *fi);
 
 static struct fuse_operations fuse_ops = {
   .init       =   fat32_init,
@@ -100,6 +103,8 @@ static struct fuse_operations fuse_ops = {
   .getattr    =   fat32_getattr,
   .open       =   fat32_open,
   .read       =   fat32_read,
+  .write      =   fat32_write,
+  .truncate   =   fat32_truncate,
 };
 
 int fat_offset, clusters_offset;

@@ -34,10 +34,10 @@ void *fat32_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
   //   printf("Not Found\n");
   // }
   // printf("remaining_clusters: %"PRId64"\n", remaining_clusters(207));
-  uint32_t x = 12;
-  printf("FUCK: %"PRId32"\n", x);
-  get_next_cluster(&x);
-  printf("FUCK: %"PRId32"\n", x);
+  // uint32_t x = 12;
+  // printf("FUCK: %"PRId32"\n", x);
+  // get_next_cluster(&x);
+  // printf("FUCK: %"PRId32"\n", x);
 
   return NULL;
 }
@@ -91,10 +91,11 @@ int fat32_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t off
   int dir_entries_per_cluster = (bpb->sectors_cluster*bpb->bytes_sector) / sizeof(struct directory_entry);
   char *clust_buffer = (char*)malloc(bpb->sectors_cluster*bpb->bytes_sector);
   device_read_sector(clust_buffer, bpb->bytes_sector, bpb->sectors_cluster, clusters_offset + ((bpb->sectors_cluster*bpb->bytes_sector)*(cluster - 2)));
-  for(int x = 0; x < dir_entries_per_cluster; x ++)
+  for(int x = 0; x < dir_entries_per_cluster; x++)
   {
     memcpy(dir_entry, clust_buffer + (sizeof(struct directory_entry) * x), sizeof(struct directory_entry));
-    if(is_dir_entry_empty(dir_entry))
+
+    if(is_dir_entry_empty(dir_entry))//Once one is empty the rest are too
       break;
 
     if(*((uint8_t*)dir_entry) != 0xE5 && !(dir_entry->Attributes & (1<<3)) && !(dir_entry->Attributes & 1))
@@ -103,12 +104,105 @@ int fat32_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t off
       print_dir_entry(dir_entry);
       printf("--\n");
       char *name = get_long_filename(cluster, x);
-      filler(buf, name, NULL, 0, FUSE_FILL_DIR_PLUS);
+      if(filler(buf, name, NULL, 0, FUSE_FILL_DIR_PLUS))
+        return 0;
       free(name);
     }
   }
-
+  free(clust_buffer);
+  free(dir_entry);
   return 0;
+}
+
+int fat32_truncate(const char *path, off_t size, struct fuse_file_info *fi)
+{
+  printf("[TRUNCATE] %s %lu\n", path, size);
+  struct directory_entry *dir_entry = resolve(path);
+  if(dir_entry == NULL)
+  {
+    printf("Path is nonexistant");
+    free(dir_entry);
+    return -1;
+  }
+  dir_entry->Filesize = size;
+
+  int y;
+  char *path_cpy = strdup(path);
+  for(y = strlen(path) - 1; y > 0; y--)
+    if(path[y] == '/')
+    {
+      path_cpy[y] = '\0';
+      break;
+    }
+
+  int64_t parent_cluster;
+  if(strlen(path_cpy))   //If not root
+  {
+    struct directory_entry *parent_entry = resolve(path_cpy);
+    if(parent_entry == NULL)
+    {
+      printf("Parent is nonexistant");
+      free(parent_entry);
+      return -1;
+    }
+    parent_cluster = ((parent_entry->First_Cluster_High<<16)|parent_entry->First_Cluster_Low) - 2;
+  }else
+    parent_cluster = bpb->root_cluster_number - 2;
+
+  for(int x = 0; x < (bpb->sectors_cluster * bpb->bytes_sector)/sizeof(struct directory_entry); x++)
+  {
+    char *lfn = get_long_filename(parent_cluster, x);
+    if(!strcmp(lfn, path+y+1))
+    {
+      device_write_sector((char*)dir_entry, sizeof(dir_entry), 1, clusters_offset + (parent_cluster * (bpb->sectors_cluster * bpb->bytes_sector)) + (x * sizeof(dir_entry)));
+      free(dir_entry);
+      free(lfn);
+      return 0;
+    }
+    free(lfn);
+  }
+  return -1;
+}
+
+int fat32_write(const char *path, const char *buffer, size_t size, off_t offset, struct fuse_file_info * fi)
+{
+  printf("[WRITE] %s\tSize: %lu\tOffset: %lu \n", path, size, offset);
+  int cluster_size = (bpb->sectors_cluster*bpb->bytes_sector);
+  struct directory_entry *dir_entry = resolve(path);
+  if(dir_entry == NULL)
+  {
+    printf("Path is nonexistant");
+    free(dir_entry);
+    return -1;
+  }
+  uint32_t next = (uint32_t)fi->fh;
+  // uint32_t last;
+  size_t write_count;
+  char *cluster_buffer = (char*)malloc(cluster_size);
+
+  // device_write_sector(buffer, size, 1, clusters_offset + (cluster_size * (next - 2)));
+  //Write until eof, if not done continue in next for-loop
+  for(write_count = 0; write_count < ceil((size*1.0)/cluster_size) && next != end_of_chain; write_count++, get_next_cluster(&next))
+  {
+    printf("Writing on cluster %d\n", next);
+    memcpy(cluster_buffer, buffer + write_count, cluster_size);
+    device_write_sector(cluster_buffer, cluster_size, 1, clusters_offset + (cluster_size * (next - 2)));
+    // last = next;
+  }
+  // for(; write_count < size/cluster_size; write_count += cluster_size)
+  // {
+  //   next = get_free_fat();
+  //   device_write_sector((char*)&next, sizeof(next), 1, fat_offset + (last * 4));
+  //
+  //   memcpy(cluster_buffer, buffer + write_count, cluster_size);
+  //
+  //   device_write_sector(cluster_buffer, cluster_size, 1, clusters_offset + (cluster_size * (next - 2)));
+  //   last = next;
+  //   device_write_sector((char*)&end_of_chain, sizeof(end_of_chain), 1, fat_offset + (last * 4));
+  // }
+
+  free(cluster_buffer);
+  return size;
 }
 
 int fat32_open(const char* path, struct fuse_file_info* fi)
@@ -144,9 +238,8 @@ int fat32_read(const char* path, char *buf, size_t size, off_t offset, struct fu
 
   printf("Cluster: %" PRId64 "\n", fi->fh);
   int cluster_size = (bpb->sectors_cluster*bpb->bytes_sector);
-  int return_size = 0;
 
-  int cluster_offsets = floor(offset/cluster_size);
+  int cluster_offsets = floor((offset*1.0)/cluster_size);
   uint32_t current_cluster = (uint32_t)fi->fh;
   offset -= cluster_offsets * cluster_size;
 
@@ -255,12 +348,7 @@ void get_next_cluster(uint32_t *current_cluster)
 
 int is_dir_entry_empty(struct directory_entry *dir_entry)
 {
-  for(int x = 0; x < sizeof(struct directory_entry); x++)
-  {
-    if(*((int8_t*)dir_entry) != 0)
-      return 0;
-  }
-  return 1;
+  return !*((int8_t*)dir_entry);
 }
 
 //Should remember to free after use
@@ -300,6 +388,17 @@ char *get_long_filename(int cluster, int entry)
   return name;
 }
 
+int get_free_fat()
+{
+  int buffer[bpb->bytes_sector * bpb->sectors_per_fat]; //Just to improve the hassle of freeing
+  device_read_sector((char*)buffer, bpb->bytes_sector, bpb->sectors_per_fat, fat_offset);
+
+  for (int x = 0; x < (bpb->bytes_sector * bpb->sectors_per_fat)/sizeof(int32_t); x++)
+    if(!buffer[x])
+      return x;
+  return -1;
+}
+
 //Printing only the relevant data
 void print_bpb()
 {
@@ -326,7 +425,7 @@ int main(int argc, char *argv[])
 {
   if(!device_open(realpath("/dev/disk/by-label/fuse", NULL)))
   {
-    printf("Cannot open device file %s\n", "/dev/disk/by-label/fuse");
+    printf("Cannot open device file\n");
     return -1;
   }
 
