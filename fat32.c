@@ -58,7 +58,8 @@ int fat32_getattr (const char *path, struct stat *stbuf, struct fuse_file_info *
 
       stbuf->st_nlink = 1;  //TODO: ?
       stbuf->st_size = dir_entry->Filesize;
-    }
+    }else
+      return -ENOENT;
   }
 
   return 0;
@@ -187,7 +188,7 @@ int fat32_write(const char *path, const char *buffer, size_t size, off_t offset,
   // for(; write_count < size/cluster_size; write_cou1nt += cluster_size)
   // {
   //   next = get_free_fat();
-  //   device_write_sector((char*)&next, sizeof(next), 1, fat_offset + (last * 4));
+  //   device_write_sector((char*)&next, end_of_chain(next), 1, fat_offsereserved_fat + (last * 4))
   //
   //   memcpy(cluster_buffer, buffer + write_count, cluster_size);
   //
@@ -324,7 +325,77 @@ struct directory_entry *resolve(const char *path)
 
 int fat32_create (const char *path, mode_t mode, struct fuse_file_info *fi)
 {
+  printf("\n\n\nHEREHEREHEREHEREHEREHERE\n\n\n");
+  printf("[CREATE] %s\n", path);
+  printf("\n\n\nHEREHEREHEREHEREHEREHERE\n\n\n");
+  struct directory_entry entry;
+  // if(path != NULL)
+  // {
+  //   printf("File already exists.\n");
+  //   free(entry);
+  //   return -EEXIST; //Not sure if appropiate error
+  // }
+  // free(entry);
+  //
+  // This way we only reserve a single cluster
 
+  char *path_cpy = strdup(path);
+  int last_index = -1;
+  replaceLast(path_cpy, '/', '\0', &last_index);
+
+  int64_t parent_cluster;
+  if(strlen(path_cpy))   //If not root
+  {
+    struct directory_entry *parent_entry = resolve(path_cpy);
+    if(parent_entry == NULL)
+    {
+      printf("Parent is nonexistant");
+      free(parent_entry);
+      return -ENOENT;
+    }
+    parent_cluster = ((parent_entry->First_Cluster_High<<16)|parent_entry->First_Cluster_Low);
+  }else
+    parent_cluster = bpb->root_cluster_number;
+
+  for(int x = 0; x < (bpb->sectors_cluster * bpb->bytes_sector)/sizeof(struct directory_entry); x++)
+  {
+    struct directory_entry tmp_entry;
+    device_read_sector((char*)&tmp_entry, sizeof(tmp_entry), 1, clusters_offset + ((parent_cluster - 2) * (bpb->sectors_cluster * bpb->bytes_sector)) + (x * sizeof(tmp_entry)));
+    if(is_dir_entry_empty(&tmp_entry))
+    {
+      struct long_filename_entry lfn;
+      lfn.sequence_number = x;
+      lfn.attribute = 0x0F;
+      lfn.first_cluster = 0;
+      for(int y = 0, z = strlen(path); y < 13; y++, z--)
+      {
+        if(y < 5)
+          lfn.name_1[y*2] = z > 0 ? path[y] : '\0';
+        else if(y < 12)
+          lfn.name_2[y*2] = z > 0 ? path[y] : '\0';
+        else
+          lfn.name_3[y*2] = z > 0 ? path[y] : '\0';
+      }
+      int reserved_fat = get_free_fat();
+      device_write_sector((char*)&end_of_chain, sizeof(end_of_chain), 1, fat_offset + (reserved_fat * 4));
+      fi->fh = reserved_fat;
+
+      strncpy(entry.Short_Filename, "TEST", 5);
+      strncpy(entry.Short_File_Extension, "TXT", 3);
+      entry.Attributes = 0x20;
+      entry.First_Cluster_High = reserved_fat >> 16;
+      entry.First_Cluster_Low = reserved_fat & 0x00FF;
+      entry.Filesize = 0;
+
+      device_write_sector((char*)&lfn, sizeof(lfn), 1, clusters_offset + ((parent_cluster - 2) * (bpb->sectors_cluster * bpb->bytes_sector)) + (x * sizeof(lfn)));
+      device_write_sector((char*)&entry, sizeof(entry), 1, clusters_offset + ((parent_cluster - 2) * (bpb->sectors_cluster * bpb->bytes_sector)) + ((x+1) * sizeof(entry)));
+      return 0;
+    }
+  }
+  return 0;
+
+
+  return 0;
 }
 
 //Function that returns amount of clusters left in chain

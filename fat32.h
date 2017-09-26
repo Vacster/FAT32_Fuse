@@ -106,6 +106,7 @@ static struct fuse_operations fuse_ops = {
   .read       =   fat32_read,
   .write      =   fat32_write,
   .truncate   =   fat32_truncate,
+  .create     =   fat32_create,
 };
 
 int fat_offset, clusters_offset;
